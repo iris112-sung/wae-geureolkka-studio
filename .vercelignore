@@ -1,0 +1,12 @@
+.next
+node_modules
+public/generated
+
+index.html
+script.js
+style.css
+assets
+
+.env
+.env.local
+.env*.local

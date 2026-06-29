@@ -1,0 +1,21 @@
+node_modules
+.next
+out
+
+.env*
+!.env.example
+.vercel
+
+# Legacy static portfolio files that existed before this MVP app.
+index.html
+script.js
+style.css
+assets
+
+public/generated/*
+!public/generated/.gitkeep
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
