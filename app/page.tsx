@@ -16,11 +16,18 @@ import {
   Loader2,
   Mic2,
   RefreshCw,
+  SlidersHorizontal,
   Sparkles,
   WandSparkles
 } from "lucide-react";
 import NextImage from "next/image";
 import { useEffect, useMemo, useState } from "react";
+import {
+  DEFAULT_TTS_OPTIONS,
+  TTS_MODEL_OPTIONS,
+  TTS_STYLE_OPTIONS,
+  TTS_VOICE_OPTIONS
+} from "@/lib/ai/tts-options";
 import type {
   GeneratedImage,
   GeneratedImagesResponse,
@@ -28,7 +35,8 @@ import type {
   Scene,
   ScriptResult,
   TopicCandidate,
-  TopicCandidatesResponse
+  TopicCandidatesResponse,
+  TtsOptions
 } from "@/lib/schemas";
 import {
   renderShortsVideo,
@@ -122,6 +130,22 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
+function formatSpeed(speed: number) {
+  return `${speed.toFixed(2).replace(/\.?0+$/, "")}x`;
+}
+
+function clampTtsSpeed(speed: number) {
+  if (!Number.isFinite(speed)) return DEFAULT_TTS_OPTIONS.speed;
+  return Math.min(4, Math.max(0.25, speed));
+}
+
+function getOptionLabel(
+  options: ReadonlyArray<{ value: string; label: string }>,
+  value: string
+) {
+  return options.find((option) => option.value === value)?.label ?? value;
+}
+
 function buildMarkdown(script: ScriptResult, images: GeneratedImage[]) {
   const imageMap = new Map(images.map((image) => [image.sceneIndex, image]));
 
@@ -182,6 +206,7 @@ export default function Home() {
   const [productionAssets, setProductionAssets] =
     useState<ProductionAssetsResponse | null>(null);
   const [renderedVideo, setRenderedVideo] = useState<RenderedVideoAsset | null>(null);
+  const [ttsOptions, setTtsOptions] = useState<TtsOptions>(DEFAULT_TTS_OPTIONS);
   const [imageProgress, setImageProgress] = useState<ImageProgress | null>(null);
   const [videoProgress, setVideoProgress] = useState<VideoRenderProgress | null>(null);
   const [generatingSceneIndexes, setGeneratingSceneIndexes] = useState<Set<number>>(
@@ -239,6 +264,24 @@ export default function Home() {
     } catch {
       setError("클립보드 복사 권한을 확인해 주세요.");
     }
+  }
+
+  function updateTtsOptions(nextOptions: Partial<TtsOptions>) {
+    setTtsOptions((currentOptions) => ({
+      ...currentOptions,
+      ...nextOptions,
+      speed:
+        nextOptions.speed === undefined
+          ? currentOptions.speed
+          : clampTtsSpeed(nextOptions.speed),
+      customInstructions:
+        nextOptions.customInstructions === undefined
+          ? currentOptions.customInstructions
+          : nextOptions.customInstructions
+    }));
+    setProductionAssets(null);
+    setRenderedVideo(null);
+    setVideoProgress(null);
   }
 
   async function handleGenerateTopics() {
@@ -402,7 +445,8 @@ export default function Home() {
         {
           jobId: scriptResult.jobId,
           selectedTopic: scriptResult.selectedTopic,
-          scenes: scriptResult.scenes
+          scenes: scriptResult.scenes,
+          ttsOptions
         }
       );
       setProductionAssets(result);
@@ -457,7 +501,16 @@ export default function Home() {
 
     downloadText(
       `${scriptResult.jobId}-wae-geureolkka.json`,
-      JSON.stringify({ script: scriptResult, images: generatedImages }, null, 2),
+      JSON.stringify(
+        {
+          script: scriptResult,
+          images: generatedImages,
+          ttsOptions,
+          productionAssets
+        },
+        null,
+        2
+      ),
       "application/json"
     );
   }
@@ -917,6 +970,137 @@ export default function Home() {
                       </div>
                     </div>
 
+                    <div className="mb-3 grid gap-3 border-y border-neutral-200 py-3">
+                      <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.14em] text-neutral-500">
+                        <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+                        TTS Settings
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <label className="grid gap-1.5 text-sm font-black text-neutral-800">
+                          모델
+                          <select
+                            value={ttsOptions.model}
+                            onChange={(event) =>
+                              updateTtsOptions({
+                                model: event.target.value as TtsOptions["model"]
+                              })
+                            }
+                            disabled={isBusy}
+                            className="focus-ring h-11 rounded-md border border-neutral-300 bg-white px-3 text-sm font-bold text-neutral-900 outline-none disabled:bg-neutral-100 disabled:text-neutral-400"
+                          >
+                            {TTS_MODEL_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label} · {option.description}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="grid gap-1.5 text-sm font-black text-neutral-800">
+                          목소리
+                          <select
+                            value={ttsOptions.voice}
+                            onChange={(event) =>
+                              updateTtsOptions({
+                                voice: event.target.value as TtsOptions["voice"]
+                              })
+                            }
+                            disabled={isBusy}
+                            className="focus-ring h-11 rounded-md border border-neutral-300 bg-white px-3 text-sm font-bold text-neutral-900 outline-none disabled:bg-neutral-100 disabled:text-neutral-400"
+                          >
+                            {TTS_VOICE_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label} · {option.description}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="grid gap-1.5 text-sm font-black text-neutral-800">
+                          말투
+                          <select
+                            value={ttsOptions.style}
+                            onChange={(event) =>
+                              updateTtsOptions({
+                                style: event.target.value as TtsOptions["style"]
+                              })
+                            }
+                            disabled={isBusy}
+                            className="focus-ring h-11 rounded-md border border-neutral-300 bg-white px-3 text-sm font-bold text-neutral-900 outline-none disabled:bg-neutral-100 disabled:text-neutral-400"
+                          >
+                            {TTS_STYLE_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label} · {option.description}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <div className="grid gap-1.5">
+                          <div className="flex items-center justify-between gap-3">
+                            <label
+                              htmlFor="tts-speed"
+                              className="text-sm font-black text-neutral-800"
+                            >
+                              배속
+                            </label>
+                            <input
+                              type="number"
+                              min="0.25"
+                              max="4"
+                              step="0.05"
+                              value={ttsOptions.speed}
+                              onChange={(event) =>
+                                updateTtsOptions({
+                                  speed: Number(event.target.value)
+                                })
+                              }
+                              disabled={isBusy}
+                              className="focus-ring h-9 w-20 rounded-md border border-neutral-300 bg-white px-2 text-right text-sm font-black text-neutral-900 outline-none disabled:bg-neutral-100 disabled:text-neutral-400"
+                              aria-label="TTS 배속 숫자 입력"
+                            />
+                          </div>
+                          <input
+                            id="tts-speed"
+                            type="range"
+                            min="0.25"
+                            max="4"
+                            step="0.05"
+                            value={ttsOptions.speed}
+                            onChange={(event) =>
+                              updateTtsOptions({
+                                speed: Number(event.target.value)
+                              })
+                            }
+                            disabled={isBusy}
+                            className="accent-[#183c38]"
+                          />
+                          <div className="flex justify-between text-xs font-bold text-neutral-500">
+                            <span>0.25x</span>
+                            <span>{formatSpeed(ttsOptions.speed)}</span>
+                            <span>4x</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <label className="grid gap-1.5 text-sm font-black text-neutral-800">
+                        추가 지시문
+                        <textarea
+                          value={ttsOptions.customInstructions ?? ""}
+                          onChange={(event) =>
+                            updateTtsOptions({
+                              customInstructions: event.target.value
+                            })
+                          }
+                          disabled={isBusy}
+                          maxLength={300}
+                          rows={3}
+                          className="focus-ring resize-y rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-semibold leading-6 text-neutral-900 outline-none disabled:bg-neutral-100 disabled:text-neutral-400"
+                          placeholder="예: 첫 문장은 더 작게 시작하고, 마지막 문장은 또렷하게 마무리"
+                        />
+                      </label>
+                    </div>
+
                     {productionAssets ? (
                       <div className="grid gap-3">
                         <audio
@@ -924,6 +1108,22 @@ export default function Home() {
                           src={productionAssets.audioUrl}
                           className="w-full"
                         />
+                        <div className="rounded-md bg-[#f1faf8] px-3 py-2 text-sm font-black text-[#183c38]">
+                          {getOptionLabel(
+                            TTS_MODEL_OPTIONS,
+                            productionAssets.ttsOptions.model
+                          )}{" "}
+                          ·{" "}
+                          {getOptionLabel(
+                            TTS_VOICE_OPTIONS,
+                            productionAssets.ttsOptions.voice
+                          )}{" "}
+                          · {getOptionLabel(
+                            TTS_STYLE_OPTIONS,
+                            productionAssets.ttsOptions.style
+                          )}{" "}
+                          · {formatSpeed(productionAssets.ttsOptions.speed)}
+                        </div>
                         <div className="grid gap-2 sm:grid-cols-3">
                           <AssetTile
                             icon={FileAudio}

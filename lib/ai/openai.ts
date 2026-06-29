@@ -2,13 +2,15 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { assertOpenAiApiKey, getAiConfig } from "@/lib/ai/config";
+import { getTtsStyleInstructions } from "@/lib/ai/tts-options";
 import {
   scriptDraftSchema,
   topicCandidatesResponseSchema,
   type Scene,
   type ScriptDraft,
   type ScriptRequest,
-  type TopicCandidatesResponse
+  type TopicCandidatesResponse,
+  type TtsOptions
 } from "@/lib/schemas";
 
 let client: OpenAI | null = null;
@@ -128,29 +130,34 @@ export async function generateImageBufferWithOpenAI(
 
 export async function generateSpeechBufferWithOpenAI({
   narrationText,
-  selectedTopic
+  selectedTopic,
+  ttsOptions
 }: {
   narrationText: string;
   selectedTopic: string;
+  ttsOptions: TtsOptions;
 }) {
   const config = getAiConfig();
   assertOpenAiApiKey(config.apiKey);
   const openai = getClient(config.apiKey);
+  const instructions = [
+    getTtsStyleInstructions(ttsOptions.style),
+    `The video topic is "${selectedTopic}".`,
+    ttsOptions.customInstructions
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const response = await openai.audio.speech.create({
-    model: config.ttsModel,
-    voice: config.ttsVoice,
+    model: ttsOptions.model,
+    voice: ttsOptions.voice,
     input: narrationText,
     response_format: "mp3",
-    speed: 1.04,
-    ...(config.ttsModel.startsWith("tts-1")
+    speed: ttsOptions.speed,
+    ...(ttsOptions.model.startsWith("tts-1")
       ? {}
       : {
-          instructions: [
-            "Natural Korean narration for a short-form psychology video.",
-            "Warm, clear, conversational, slightly fast but not rushed.",
-            `The video topic is "${selectedTopic}".`
-          ].join(" ")
+          instructions
         })
   } as never);
 

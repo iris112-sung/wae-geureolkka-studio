@@ -82,11 +82,36 @@ export const generatedImagesResponseSchema = z
   })
   .strict();
 
+export const ttsOptionsSchema = z
+  .object({
+    model: z.enum(["gpt-4o-mini-tts", "tts-1", "tts-1-hd"]),
+    voice: z.enum([
+      "alloy",
+      "ash",
+      "ballad",
+      "coral",
+      "echo",
+      "fable",
+      "onyx",
+      "nova",
+      "sage",
+      "shimmer",
+      "verse",
+      "marin",
+      "cedar"
+    ]),
+    speed: z.number().min(0.25).max(4),
+    style: z.enum(["warm", "calm", "lively", "serious", "soft"]),
+    customInstructions: z.string().trim().max(300).optional()
+  })
+  .strict();
+
 export const productionAssetsRequestSchema = z
   .object({
     jobId: z.string().min(8),
     selectedTopic: z.string().min(4).max(90),
-    scenes: z.array(sceneSchema).min(1).max(8)
+    scenes: z.array(sceneSchema).min(1).max(8),
+    ttsOptions: ttsOptionsSchema.optional()
   })
   .strict();
 
@@ -113,6 +138,7 @@ export const productionAssetsResponseSchema = z
     srt: z.string().min(1).max(6000),
     srtUrl: z.string().min(1),
     srtFileName: z.string().min(1),
+    ttsOptions: ttsOptionsSchema,
     captions: z.array(captionCueSchema).min(1).max(8)
   })
   .strict();
@@ -127,6 +153,7 @@ export type ScriptResult = z.infer<typeof scriptResultSchema>;
 export type ImagesRequest = z.infer<typeof imagesRequestSchema>;
 export type GeneratedImage = z.infer<typeof generatedImageSchema>;
 export type GeneratedImagesResponse = z.infer<typeof generatedImagesResponseSchema>;
+export type TtsOptions = z.infer<typeof ttsOptionsSchema>;
 export type ProductionAssetsRequest = z.infer<typeof productionAssetsRequestSchema>;
 export type CaptionCue = z.infer<typeof captionCueSchema>;
 export type ProductionAssetsResponse = z.infer<

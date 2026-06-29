@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { createMockSpeechWav } from "@/lib/ai/mock-audio";
 import { getAiConfig } from "@/lib/ai/config";
 import { generateSpeechBufferWithOpenAI } from "@/lib/ai/openai";
+import {
+  DEFAULT_TTS_OPTIONS,
+  isTtsModel,
+  isTtsVoice,
+  normalizeTtsOptions
+} from "@/lib/ai/tts-options";
 import { jsonError } from "@/lib/api-response";
 import { saveGeneratedProductionAsset } from "@/lib/storage/production-assets";
 import {
@@ -72,10 +78,36 @@ function buildNarrationText(scenes: Scene[]) {
   return scenes.map((scene) => scene.narration).join("\n\n").slice(0, 4096);
 }
 
+function buildAudioFileName({
+  useMockAi,
+  model,
+  voice,
+  speed
+}: {
+  useMockAi: boolean;
+  model: string;
+  voice: string;
+  speed: number;
+}) {
+  const extension = useMockAi ? "wav" : "mp3";
+  const safeSpeed = String(speed).replace(/[^0-9.]/g, "");
+
+  return `voiceover-${model}-${voice}-${safeSpeed}x.${extension}`;
+}
+
 export async function POST(request: Request) {
   try {
     const body = productionAssetsRequestSchema.parse(await request.json());
     const config = getAiConfig();
+    const ttsOptions = normalizeTtsOptions({
+      model: isTtsModel(config.ttsModel)
+        ? config.ttsModel
+        : DEFAULT_TTS_OPTIONS.model,
+      voice: isTtsVoice(config.ttsVoice)
+        ? config.ttsVoice
+        : DEFAULT_TTS_OPTIONS.voice,
+      ...body.ttsOptions
+    });
     const captions = buildCaptionCues(body.scenes);
     const plannedDurationSec = body.scenes.reduce(
       (sum, scene) => sum + scene.durationSec,
@@ -85,12 +117,18 @@ export async function POST(request: Request) {
     const vtt = buildVtt(captions);
     const srt = buildSrt(captions);
     const audioMimeType = config.useMockAi ? "audio/wav" : "audio/mpeg";
-    const audioFileName = config.useMockAi ? "voiceover.wav" : "voiceover.mp3";
+    const audioFileName = buildAudioFileName({
+      useMockAi: config.useMockAi,
+      model: ttsOptions.model,
+      voice: ttsOptions.voice,
+      speed: ttsOptions.speed
+    });
     const audioBuffer = config.useMockAi
-      ? createMockSpeechWav(plannedDurationSec)
+      ? createMockSpeechWav(plannedDurationSec / ttsOptions.speed)
       : await generateSpeechBufferWithOpenAI({
           narrationText,
-          selectedTopic: body.selectedTopic
+          selectedTopic: body.selectedTopic,
+          ttsOptions
         });
 
     const [audioAsset, vttAsset, srtAsset] = await Promise.all([
@@ -128,6 +166,7 @@ export async function POST(request: Request) {
         srt,
         srtUrl: srtAsset.publicUrl,
         srtFileName: srtAsset.fileName,
+        ttsOptions,
         captions
       })
     );
