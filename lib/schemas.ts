@@ -82,6 +82,41 @@ export const generatedImagesResponseSchema = z
   })
   .strict();
 
+export const productionAssetsRequestSchema = z
+  .object({
+    jobId: z.string().min(8),
+    selectedTopic: z.string().min(4).max(90),
+    scenes: z.array(sceneSchema).min(1).max(8)
+  })
+  .strict();
+
+export const captionCueSchema = z
+  .object({
+    sceneIndex: z.number().int().min(1).max(8),
+    startSec: z.number().min(0),
+    endSec: z.number().min(0),
+    text: z.string().min(1).max(120)
+  })
+  .strict();
+
+export const productionAssetsResponseSchema = z
+  .object({
+    jobId: z.string().min(8),
+    plannedDurationSec: z.number().int().min(1).max(120),
+    narrationText: z.string().min(1).max(4096),
+    audioUrl: z.string().min(1),
+    audioFileName: z.string().min(1),
+    audioMimeType: z.string().min(1),
+    vtt: z.string().min(1).max(6000),
+    vttUrl: z.string().min(1),
+    vttFileName: z.string().min(1),
+    srt: z.string().min(1).max(6000),
+    srtUrl: z.string().min(1),
+    srtFileName: z.string().min(1),
+    captions: z.array(captionCueSchema).min(1).max(8)
+  })
+  .strict();
+
 export type TopicCandidatesRequest = z.infer<typeof topicCandidatesRequestSchema>;
 export type TopicCandidate = z.infer<typeof topicCandidateSchema>;
 export type TopicCandidatesResponse = z.infer<typeof topicCandidatesResponseSchema>;
@@ -92,3 +127,8 @@ export type ScriptResult = z.infer<typeof scriptResultSchema>;
 export type ImagesRequest = z.infer<typeof imagesRequestSchema>;
 export type GeneratedImage = z.infer<typeof generatedImageSchema>;
 export type GeneratedImagesResponse = z.infer<typeof generatedImagesResponseSchema>;
+export type ProductionAssetsRequest = z.infer<typeof productionAssetsRequestSchema>;
+export type CaptionCue = z.infer<typeof captionCueSchema>;
+export type ProductionAssetsResponse = z.infer<
+  typeof productionAssetsResponseSchema
+>;

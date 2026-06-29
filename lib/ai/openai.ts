@@ -125,3 +125,34 @@ export async function generateImageBufferWithOpenAI(
 
   throw new Error("OpenAI 이미지 응답에서 저장할 이미지를 찾지 못했습니다.");
 }
+
+export async function generateSpeechBufferWithOpenAI({
+  narrationText,
+  selectedTopic
+}: {
+  narrationText: string;
+  selectedTopic: string;
+}) {
+  const config = getAiConfig();
+  assertOpenAiApiKey(config.apiKey);
+  const openai = getClient(config.apiKey);
+
+  const response = await openai.audio.speech.create({
+    model: config.ttsModel,
+    voice: config.ttsVoice,
+    input: narrationText,
+    response_format: "mp3",
+    speed: 1.04,
+    ...(config.ttsModel.startsWith("tts-1")
+      ? {}
+      : {
+          instructions: [
+            "Natural Korean narration for a short-form psychology video.",
+            "Warm, clear, conversational, slightly fast but not rushed.",
+            `The video topic is "${selectedTopic}".`
+          ].join(" ")
+        })
+  } as never);
+
+  return Buffer.from(await response.arrayBuffer());
+}

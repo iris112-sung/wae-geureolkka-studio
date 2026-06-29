@@ -3,30 +3,40 @@
 import {
   ArrowRight,
   BadgeCheck,
+  Captions,
   CheckCircle2,
+  Clapperboard,
   Clipboard,
   Copy,
   Download,
+  FileAudio,
   FileText,
   Image as ImageIcon,
   Images,
   Loader2,
+  Mic2,
   RefreshCw,
   Sparkles,
   WandSparkles
 } from "lucide-react";
 import NextImage from "next/image";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   GeneratedImage,
   GeneratedImagesResponse,
+  ProductionAssetsResponse,
   Scene,
   ScriptResult,
   TopicCandidate,
   TopicCandidatesResponse
 } from "@/lib/schemas";
+import {
+  renderShortsVideo,
+  type RenderedVideoAsset,
+  type VideoRenderProgress
+} from "@/lib/video/browser-render";
 
-type LoadingState = "topics" | "script" | "images" | null;
+type LoadingState = "topics" | "script" | "images" | "voiceover" | "video" | null;
 
 const EXAMPLE_IDEAS = [
   "왜 월급날엔 돈을 더 쉽게 쓸까?",
@@ -54,8 +64,8 @@ const WORKFLOW_STEPS = [
   },
   {
     id: 4,
-    title: "씬별 이미지 생성",
-    icon: Images
+    title: "이미지·영상 생성",
+    icon: Clapperboard
   }
 ];
 
@@ -95,6 +105,21 @@ function downloadText(fileName: string, text: string, mimeType: string) {
   anchor.download = fileName;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadUrl(fileName: string, url: string) {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+  }
+
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
 function buildMarkdown(script: ScriptResult, images: GeneratedImage[]) {
@@ -154,7 +179,11 @@ export default function Home() {
   const [selectedTopicId, setSelectedTopicId] = useState<string>("");
   const [scriptResult, setScriptResult] = useState<ScriptResult | null>(null);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
+  const [productionAssets, setProductionAssets] =
+    useState<ProductionAssetsResponse | null>(null);
+  const [renderedVideo, setRenderedVideo] = useState<RenderedVideoAsset | null>(null);
   const [imageProgress, setImageProgress] = useState<ImageProgress | null>(null);
+  const [videoProgress, setVideoProgress] = useState<VideoRenderProgress | null>(null);
   const [generatingSceneIndexes, setGeneratingSceneIndexes] = useState<Set<number>>(
     () => new Set()
   );
@@ -172,6 +201,14 @@ export default function Home() {
     [generatedImages]
   );
 
+  const hasAllImages = useMemo(
+    () => {
+      if (!scriptResult) return false;
+      return scriptResult.scenes.every((scene) => imagesByScene.has(scene.index));
+    },
+    [imagesByScene, scriptResult]
+  );
+
   const activeStep = useMemo(() => {
     if (scriptResult) return 4;
     if (selectedTopic) return 3;
@@ -185,6 +222,14 @@ export default function Home() {
   );
 
   const isBusy = loading !== null;
+
+  useEffect(() => {
+    return () => {
+      if (renderedVideo?.videoUrl) {
+        URL.revokeObjectURL(renderedVideo.videoUrl);
+      }
+    };
+  }, [renderedVideo?.videoUrl]);
 
   async function copyText(key: string, text: string) {
     try {
@@ -203,7 +248,10 @@ export default function Home() {
     setSelectedTopicId("");
     setScriptResult(null);
     setGeneratedImages([]);
+    setProductionAssets(null);
+    setRenderedVideo(null);
     setImageProgress(null);
+    setVideoProgress(null);
     setGeneratingSceneIndexes(new Set());
 
     try {
@@ -229,7 +277,10 @@ export default function Home() {
     setLoading("script");
     setScriptResult(null);
     setGeneratedImages([]);
+    setProductionAssets(null);
+    setRenderedVideo(null);
     setImageProgress(null);
+    setVideoProgress(null);
     setGeneratingSceneIndexes(new Set());
 
     try {
@@ -255,6 +306,7 @@ export default function Home() {
     setError("");
     setLoading("images");
     setGeneratedImages([]);
+    setRenderedVideo(null);
     setImageProgress({
       completed: 0,
       total: scriptResult.scenes.length
@@ -331,6 +383,71 @@ export default function Home() {
     } finally {
       setImageProgress(null);
       setGeneratingSceneIndexes(new Set());
+      setLoading(null);
+    }
+  }
+
+  async function handleGenerateProductionAssets() {
+    if (!scriptResult) return;
+
+    setError("");
+    setLoading("voiceover");
+    setProductionAssets(null);
+    setRenderedVideo(null);
+    setVideoProgress(null);
+
+    try {
+      const result = await postJson<ProductionAssetsResponse>(
+        "/api/production-assets",
+        {
+          jobId: scriptResult.jobId,
+          selectedTopic: scriptResult.selectedTopic,
+          scenes: scriptResult.scenes
+        }
+      );
+      setProductionAssets(result);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "TTS 음성 및 자막 생성에 실패했습니다."
+      );
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleRenderVideo() {
+    if (!scriptResult || !productionAssets) return;
+
+    setError("");
+    setLoading("video");
+    setRenderedVideo(null);
+    setVideoProgress({
+      phase: "preparing",
+      percent: 1
+    });
+
+    try {
+      const video = await renderShortsVideo({
+        jobId: scriptResult.jobId,
+        title: scriptResult.title,
+        scenes: scriptResult.scenes,
+        images: generatedImages,
+        captions: productionAssets.captions,
+        audioUrl: productionAssets.audioUrl,
+        plannedDurationSec: productionAssets.plannedDurationSec,
+        onProgress: setVideoProgress
+      });
+      setRenderedVideo(video);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "영상 렌더링에 실패했습니다."
+      );
+    } finally {
+      setVideoProgress(null);
       setLoading(null);
     }
   }
@@ -558,7 +675,10 @@ export default function Home() {
                         setSelectedTopicId(candidate.id);
                         setScriptResult(null);
                         setGeneratedImages([]);
+                        setProductionAssets(null);
+                        setRenderedVideo(null);
                         setImageProgress(null);
+                        setVideoProgress(null);
                         setGeneratingSceneIndexes(new Set());
                       }}
                         className={cx(
@@ -715,8 +835,18 @@ export default function Home() {
           <StepSection
             id="step-4"
             number="04"
-            title="씬별 이미지 생성 및 결과 확인"
-            stateLabel={generatedImages.length ? "이미지 있음" : scriptResult ? "준비됨" : "대기"}
+            title="씬별 이미지 생성 및 영상 확인"
+            stateLabel={
+              renderedVideo
+                ? "영상 완료"
+                : productionAssets
+                  ? "음성 있음"
+                  : generatedImages.length
+                    ? "이미지 있음"
+                    : scriptResult
+                      ? "준비됨"
+                      : "대기"
+            }
           >
             {scriptResult ? (
               <div className="grid gap-4">
@@ -768,6 +898,159 @@ export default function Home() {
                         ? `${imageProgress.completed}/${imageProgress.total} 생성 중`
                         : "이미지 생성"}
                     </PrimaryButton>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-neutral-200 bg-white p-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+                  <div>
+                    <div className="mb-3 flex items-start gap-3">
+                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-[#e9f5f3] text-[#183c38]">
+                        <Clapperboard className="h-5 w-5" aria-hidden="true" />
+                      </span>
+                      <div>
+                        <p className="text-xs font-black uppercase tracking-[0.14em] text-neutral-500">
+                          Final Video
+                        </p>
+                        <h3 className="mt-1 text-lg font-black">
+                          TTS 음성 · 자막 · 영상 패키지
+                        </h3>
+                      </div>
+                    </div>
+
+                    {productionAssets ? (
+                      <div className="grid gap-3">
+                        <audio
+                          controls
+                          src={productionAssets.audioUrl}
+                          className="w-full"
+                        />
+                        <div className="grid gap-2 sm:grid-cols-3">
+                          <AssetTile
+                            icon={FileAudio}
+                            label="Voiceover"
+                            value={productionAssets.audioFileName}
+                            onClick={() =>
+                              downloadUrl(
+                                productionAssets.audioFileName,
+                                productionAssets.audioUrl
+                              )
+                            }
+                          />
+                          <AssetTile
+                            icon={Captions}
+                            label="VTT"
+                            value={productionAssets.vttFileName}
+                            onClick={() =>
+                              downloadUrl(
+                                productionAssets.vttFileName,
+                                productionAssets.vttUrl
+                              )
+                            }
+                          />
+                          <AssetTile
+                            icon={FileText}
+                            label="SRT"
+                            value={productionAssets.srtFileName}
+                            onClick={() =>
+                              downloadUrl(
+                                productionAssets.srtFileName,
+                                productionAssets.srtUrl
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-xs font-black uppercase tracking-[0.14em] text-neutral-500">
+                              Subtitles
+                            </span>
+                            <IconButton
+                              label={copiedKey === "srt" ? "복사됨" : "SRT 복사"}
+                              icon={Copy}
+                              onClick={() => copyText("srt", productionAssets.srt)}
+                            />
+                          </div>
+                          <div className="grid gap-2">
+                            {productionAssets.captions.map((caption) => (
+                              <div
+                                key={caption.sceneIndex}
+                                className="flex items-start gap-2 text-sm"
+                              >
+                                <span className="shrink-0 rounded-md bg-white px-2 py-1 text-xs font-black text-neutral-500">
+                                  {caption.startSec}s
+                                </span>
+                                <p className="font-bold leading-6 text-neutral-800">
+                                  {caption.text}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <EmptyState
+                        icon={Mic2}
+                        title="아직 음성과 자막이 없습니다"
+                        text="스크립트를 바탕으로 TTS 음성과 SRT/VTT 자막을 생성하세요."
+                      />
+                    )}
+                  </div>
+
+                  <div className="grid gap-3">
+                    <PrimaryButton
+                      onClick={handleGenerateProductionAssets}
+                      disabled={!scriptResult || isBusy}
+                      loading={loading === "voiceover"}
+                      icon={Mic2}
+                    >
+                      TTS·자막 생성
+                    </PrimaryButton>
+                    <SecondaryButton
+                      onClick={handleRenderVideo}
+                      disabled={!productionAssets || !hasAllImages || isBusy}
+                      loading={loading === "video"}
+                      icon={Clapperboard}
+                    >
+                      {videoProgress
+                        ? `${videoProgress.percent}% 렌더링`
+                        : "영상 렌더"}
+                    </SecondaryButton>
+                    {videoProgress ? (
+                      <div className="h-2 overflow-hidden rounded-full bg-neutral-200">
+                        <div
+                          className="h-full rounded-full bg-[#183c38] transition-all"
+                          style={{ width: `${videoProgress.percent}%` }}
+                        />
+                      </div>
+                    ) : null}
+                    {!hasAllImages ? (
+                      <p className="text-xs font-bold leading-5 text-neutral-500">
+                        영상 렌더는 모든 씬 이미지가 준비되면 활성화됩니다.
+                      </p>
+                    ) : null}
+                    {renderedVideo ? (
+                      <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+                        <video
+                          controls
+                          src={renderedVideo.videoUrl}
+                          className="aspect-[9/16] w-full rounded-md bg-black object-cover"
+                        />
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-black text-neutral-500">
+                            {formatBytes(renderedVideo.sizeBytes)} ·{" "}
+                            {renderedVideo.mimeType.includes("mp4") ? "MP4" : "WEBM"}
+                          </span>
+                          <a
+                            href={renderedVideo.videoUrl}
+                            download={renderedVideo.fileName}
+                            className="focus-ring inline-flex h-9 items-center gap-2 rounded-md bg-neutral-900 px-3 text-xs font-black text-white transition hover:bg-neutral-700"
+                          >
+                            <Download className="h-4 w-4" aria-hidden="true" />
+                            영상 다운로드
+                          </a>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -996,6 +1279,38 @@ function IconButton({
     >
       <Icon className="h-4 w-4" aria-hidden="true" />
       {label}
+    </button>
+  );
+}
+
+function AssetTile({
+  icon: Icon,
+  label,
+  value,
+  onClick
+}: {
+  icon: typeof Sparkles;
+  label: string;
+  value: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="focus-ring flex min-h-20 items-center gap-3 rounded-md border border-neutral-200 bg-white p-3 text-left transition hover:border-neutral-900"
+    >
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-neutral-100 text-neutral-700">
+        <Icon className="h-4 w-4" aria-hidden="true" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-xs font-black uppercase tracking-[0.12em] text-neutral-500">
+          {label}
+        </span>
+        <span className="mt-1 block truncate text-sm font-black text-neutral-900">
+          {value}
+        </span>
+      </span>
     </button>
   );
 }
