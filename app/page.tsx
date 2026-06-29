@@ -20,6 +20,7 @@ import { useMemo, useState } from "react";
 import type {
   GeneratedImage,
   GeneratedImagesResponse,
+  Scene,
   ScriptResult,
   TopicCandidate,
   TopicCandidatesResponse
@@ -57,6 +58,13 @@ const WORKFLOW_STEPS = [
     icon: Images
   }
 ];
+
+const IMAGE_REQUEST_CONCURRENCY = 2;
+
+type ImageProgress = {
+  completed: number;
+  total: number;
+};
 
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -117,12 +125,39 @@ function buildMarkdown(script: ScriptResult, images: GeneratedImage[]) {
   ].join("\n");
 }
 
+function sortGeneratedImages(images: GeneratedImage[]) {
+  return [...images].sort((a, b) => a.sceneIndex - b.sceneIndex);
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>
+) {
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const item = items[nextIndex];
+        nextIndex += 1;
+        await worker(item);
+      }
+    })
+  );
+}
+
 export default function Home() {
   const [idea, setIdea] = useState(EXAMPLE_IDEAS[0]);
   const [candidates, setCandidates] = useState<TopicCandidate[]>([]);
   const [selectedTopicId, setSelectedTopicId] = useState<string>("");
   const [scriptResult, setScriptResult] = useState<ScriptResult | null>(null);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
+  const [imageProgress, setImageProgress] = useState<ImageProgress | null>(null);
+  const [generatingSceneIndexes, setGeneratingSceneIndexes] = useState<Set<number>>(
+    () => new Set()
+  );
   const [loading, setLoading] = useState<LoadingState>(null);
   const [error, setError] = useState<string>("");
   const [copiedKey, setCopiedKey] = useState<string>("");
@@ -168,6 +203,8 @@ export default function Home() {
     setSelectedTopicId("");
     setScriptResult(null);
     setGeneratedImages([]);
+    setImageProgress(null);
+    setGeneratingSceneIndexes(new Set());
 
     try {
       const result = await postJson<TopicCandidatesResponse>("/api/topic-candidates", {
@@ -192,6 +229,8 @@ export default function Home() {
     setLoading("script");
     setScriptResult(null);
     setGeneratedImages([]);
+    setImageProgress(null);
+    setGeneratingSceneIndexes(new Set());
 
     try {
       const result = await postJson<ScriptResult>("/api/script", {
@@ -216,14 +255,73 @@ export default function Home() {
     setError("");
     setLoading("images");
     setGeneratedImages([]);
+    setImageProgress({
+      completed: 0,
+      total: scriptResult.scenes.length
+    });
+    setGeneratingSceneIndexes(
+      new Set(scriptResult.scenes.map((scene) => scene.index))
+    );
 
     try {
-      const result = await postJson<GeneratedImagesResponse>("/api/images", {
-        jobId: scriptResult.jobId,
-        selectedTopic: scriptResult.selectedTopic,
-        scenes: scriptResult.scenes
-      });
-      setGeneratedImages(result.images);
+      const sceneErrors: string[] = [];
+
+      await runWithConcurrency<Scene>(
+        scriptResult.scenes,
+        IMAGE_REQUEST_CONCURRENCY,
+        async (scene) => {
+          try {
+            const result = await postJson<GeneratedImagesResponse>("/api/images", {
+              jobId: scriptResult.jobId,
+              selectedTopic: scriptResult.selectedTopic,
+              scenes: [scene]
+            });
+            const image = result.images[0];
+
+            if (!image) {
+              throw new Error(`Scene ${scene.index} 이미지 응답이 비어 있습니다.`);
+            }
+
+            setGeneratedImages((currentImages) =>
+              sortGeneratedImages([
+                ...currentImages.filter(
+                  (currentImage) => currentImage.sceneIndex !== image.sceneIndex
+                ),
+                image
+              ])
+            );
+          } catch (sceneError) {
+            sceneErrors.push(
+              sceneError instanceof Error
+                ? `Scene ${scene.index}: ${sceneError.message}`
+                : `Scene ${scene.index}: 이미지 생성 실패`
+            );
+          } finally {
+            setImageProgress((currentProgress) =>
+              currentProgress
+                ? {
+                    ...currentProgress,
+                    completed: Math.min(
+                      currentProgress.completed + 1,
+                      currentProgress.total
+                    )
+                  }
+                : currentProgress
+            );
+            setGeneratingSceneIndexes((currentIndexes) => {
+              const nextIndexes = new Set(currentIndexes);
+              nextIndexes.delete(scene.index);
+              return nextIndexes;
+            });
+          }
+        }
+      );
+
+      if (sceneErrors.length > 0) {
+        throw new Error(
+          `${sceneErrors.length}개 씬 이미지 생성에 실패했습니다. ${sceneErrors[0]}`
+        );
+      }
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -231,6 +329,8 @@ export default function Home() {
           : "씬 이미지 생성에 실패했습니다."
       );
     } finally {
+      setImageProgress(null);
+      setGeneratingSceneIndexes(new Set());
       setLoading(null);
     }
   }
@@ -455,10 +555,12 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={() => {
-                          setSelectedTopicId(candidate.id);
-                          setScriptResult(null);
-                          setGeneratedImages([]);
-                        }}
+                        setSelectedTopicId(candidate.id);
+                        setScriptResult(null);
+                        setGeneratedImages([]);
+                        setImageProgress(null);
+                        setGeneratingSceneIndexes(new Set());
+                      }}
                         className={cx(
                           "focus-ring mt-4 inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-black transition",
                           selected
@@ -624,8 +726,22 @@ export default function Home() {
                       Result
                     </p>
                     <p className="mt-1 text-lg font-black">
-                      {scriptResult.scenes.length}개 씬 · Job {scriptResult.jobId.slice(0, 8)}
+                      {imageProgress
+                        ? `${imageProgress.total}개 씬 · ${imageProgress.completed}/${imageProgress.total} 생성 완료`
+                        : `${scriptResult.scenes.length}개 씬 · Job ${scriptResult.jobId.slice(0, 8)}`}
                     </p>
+                    {imageProgress ? (
+                      <div className="mt-3 h-2 w-full max-w-72 overflow-hidden rounded-full bg-neutral-200">
+                        <div
+                          className="h-full rounded-full bg-[#183c38] transition-all"
+                          style={{
+                            width: `${Math.round(
+                              (imageProgress.completed / imageProgress.total) * 100
+                            )}%`
+                          }}
+                        />
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <SecondaryButton
@@ -648,7 +764,9 @@ export default function Home() {
                       loading={loading === "images"}
                       icon={Images}
                     >
-                      이미지 생성
+                      {imageProgress
+                        ? `${imageProgress.completed}/${imageProgress.total} 생성 중`
+                        : "이미지 생성"}
                     </PrimaryButton>
                   </div>
                 </div>
@@ -656,6 +774,7 @@ export default function Home() {
                 <div className="grid gap-4 xl:grid-cols-2">
                   {scriptResult.scenes.map((scene) => {
                     const image = imagesByScene.get(scene.index);
+                    const isGeneratingScene = generatingSceneIndexes.has(scene.index);
 
                     return (
                       <article
@@ -675,13 +794,27 @@ export default function Home() {
                           ) : (
                             <div className="grid h-full place-items-center p-6 text-center text-neutral-500">
                               <div>
-                                <ImageIcon
-                                  className="mx-auto h-10 w-10"
-                                  aria-hidden="true"
-                                />
+                                {isGeneratingScene ? (
+                                  <Loader2
+                                    className="mx-auto h-10 w-10 animate-spin text-[#183c38]"
+                                    aria-hidden="true"
+                                  />
+                                ) : (
+                                  <ImageIcon
+                                    className="mx-auto h-10 w-10"
+                                    aria-hidden="true"
+                                  />
+                                )}
                                 <p className="mt-3 text-sm font-black">
-                                  Scene {scene.index}
+                                  {isGeneratingScene
+                                    ? `Scene ${scene.index} 생성 중`
+                                    : `Scene ${scene.index}`}
                                 </p>
+                                {isGeneratingScene ? (
+                                  <p className="mt-1 text-xs font-bold text-neutral-400">
+                                    완료되는 즉시 표시됩니다
+                                  </p>
+                                ) : null}
                               </div>
                             </div>
                           )}
